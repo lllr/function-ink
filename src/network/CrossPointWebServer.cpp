@@ -22,6 +22,7 @@
 
 #include "AppCapabilities.h"
 #include "AppVersion.h"
+#include "CalendarConfigStore.h"
 #include "CrossPointSettings.h"
 #include "FontInstaller.h"
 #include "OpdsServerStore.h"
@@ -342,6 +343,11 @@ void CrossPointWebServer::begin() {
   server->on("/api/wifi", HTTP_GET, [this] { handleGetWifiNetworks(); });
   server->on("/api/wifi", HTTP_POST, [this] { handlePostWifiNetwork(); });
   server->on("/api/wifi/delete", HTTP_POST, [this] { handleDeleteWifiNetwork(); });
+
+  // Calendar endpoints
+  server->on("/api/calendar", HTTP_GET, [this] { handleGetCalendars(); });
+  server->on("/api/calendar", HTTP_POST, [this] { handlePostCalendar(); });
+  server->on("/api/calendar/delete", HTTP_POST, [this] { handleDeleteCalendar(); });
 
   server->onNotFound([this] { handleNotFound(); });
 
@@ -1721,6 +1727,113 @@ void CrossPointWebServer::handleDeleteWifiNetwork() {
   }
 
   LOG_DBG("WEB", "Deleted Wi-Fi network at index %d (SSID: %s)", idx, ssid->c_str());
+  server->send(200, "text/plain", "OK");
+}
+
+void CrossPointWebServer::handleGetCalendars() const {
+  const auto& calendars = CALENDAR_CONFIG_STORE.getCalendars();
+
+  server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server->send(200, "application/json", "");
+  server->sendContent("[");
+
+  char output[512];
+  constexpr size_t outputSize = sizeof(output);
+  JsonDocument doc;
+
+  for (size_t i = 0; i < calendars.size(); i++) {
+    doc.clear();
+    doc["index"] = i;
+    doc["name"] = calendars[i].name;
+    doc["url"] = calendars[i].url;
+    doc["enabled"] = calendars[i].enabled;
+
+    const size_t written = serializeJson(doc, output, outputSize);
+    if (written >= outputSize) continue;
+
+    if (i > 0) server->sendContent(",");
+    server->sendContent(output);
+    yield();
+  }
+
+  server->sendContent("]");
+  server->sendContent("");
+}
+
+void CrossPointWebServer::handlePostCalendar() {
+  if (!server->hasArg("plain")) {
+    server->send(400, "text/plain", "Missing JSON body");
+    return;
+  }
+
+  const String body = server->arg("plain");
+  JsonDocument doc;
+  const DeserializationError err = deserializeJson(doc, body);
+  if (err) {
+    server->send(400, "text/plain", String("Invalid JSON: ") + err.c_str());
+    return;
+  }
+
+  CalendarSource cal;
+  cal.name = doc["name"] | std::string("Google Calendar");
+  cal.url = doc["url"] | std::string("");
+  cal.enabled = doc["enabled"] | true;
+
+  if (cal.url.empty()) {
+    server->send(400, "text/plain", "URL cannot be empty");
+    return;
+  }
+
+  if (doc["index"].is<int>()) {
+    int idx = doc["index"].as<int>();
+    if (idx < 0 || idx >= static_cast<int>(CALENDAR_CONFIG_STORE.getCount())) {
+      server->send(400, "text/plain", "Invalid calendar index");
+      return;
+    }
+    CALENDAR_CONFIG_STORE.updateCalendar(static_cast<size_t>(idx), cal);
+    LOG_DBG("WEB", "Updated calendar at index %d", idx);
+  } else {
+    if (!CALENDAR_CONFIG_STORE.addCalendar(cal)) {
+      server->send(400, "text/plain", "Cannot add calendar (limit reached)");
+      return;
+    }
+    LOG_DBG("WEB", "Added new calendar: %s", cal.name.c_str());
+  }
+
+  server->send(200, "text/plain", "OK");
+}
+
+void CrossPointWebServer::handleDeleteCalendar() {
+  if (!server->hasArg("plain")) {
+    server->send(400, "text/plain", "Missing JSON body");
+    return;
+  }
+
+  const String body = server->arg("plain");
+  JsonDocument doc;
+  const DeserializationError err = deserializeJson(doc, body);
+  if (err) {
+    server->send(400, "text/plain", String("Invalid JSON: ") + err.c_str());
+    return;
+  }
+
+  if (!doc["index"].is<int>()) {
+    server->send(400, "text/plain", "Missing index");
+    return;
+  }
+
+  int idx = doc["index"].as<int>();
+  if (idx < 0 || idx >= static_cast<int>(CALENDAR_CONFIG_STORE.getCount())) {
+    server->send(400, "text/plain", "Invalid calendar index");
+    return;
+  }
+
+  if (!CALENDAR_CONFIG_STORE.removeCalendar(static_cast<size_t>(idx))) {
+    server->send(400, "text/plain", "Failed to delete calendar");
+    return;
+  }
+
+  LOG_DBG("WEB", "Deleted calendar at index %d", idx);
   server->send(200, "text/plain", "OK");
 }
 

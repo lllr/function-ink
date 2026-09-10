@@ -77,12 +77,14 @@ inline esp_sleep_wakeup_cause_t esp_sleep_get_wakeup_cause() { return ESP_SLEEP_
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "GlobalActions.h"
+#include "CalendarEventStore.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
+#include "components/themes/calendar/CalendarTheme.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/reader/KOReaderSyncActivity.h"
@@ -700,6 +702,18 @@ void enterDeepSleep(bool fromTimeout) {
   mirrorWakeShortPressToNvs();  // next boot's wake-hold check reads this pre-SD
   LOG_DBG("MAIN", "Entering deep sleep");
 
+  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_SLEEP) {
+    uint8_t hour = 0, minute = 0;
+    if (halClock.isAvailable() && halClock.getTime(hour, minute)) {
+      int secondsToNextHour = (60 - minute) * 60;
+      if (secondsToNextHour < 60) secondsToNextHour = 3600;
+      LOG_INF("MAIN", "Arming RTC timer wakeup for next hour in %d seconds", secondsToNextHour);
+#ifndef SIMULATOR
+      esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(secondsToNextHour) * 1000000ULL);
+#endif
+    }
+  }
+
   powerManager.startDeepSleep(gpio);
 }
 
@@ -876,6 +890,44 @@ void setup() {
 
   SETTINGS.loadFromFile();
   Storage.installDateTimeCallback(&SETTINGS.clockUtcOffsetQ);
+
+#ifndef SIMULATOR
+  if (rawWakeupCause == ESP_SLEEP_WAKEUP_TIMER &&
+      SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_SLEEP) {
+    LOG_INF("MAIN", "Hourly RTC timer wake: refreshing calendar screensaver");
+    display.begin(true);
+    renderer.begin();
+
+    const auto& events = CALENDAR_EVENT_STORE.getEvents();
+    uint16_t year = 2026;
+    uint8_t month = 1, day = 1, hour = 0, min = 0;
+    bool hasTime = halClock.isAvailable() && halClock.getDateTime(year, month, day, hour, min);
+    int64_t currentLocalEpoch = 0;
+    if (hasTime && year >= 2025) {
+      static const int daysInM[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+      auto isLeap = [](int y) { return (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)); };
+      int64_t totalDays = 0;
+      for (int y = 1970; y < year; ++y) totalDays += isLeap(y) ? 366 : 365;
+      for (int m = 1; m < month; ++m) totalDays += (m == 2 && isLeap(year)) ? 29 : daysInM[m - 1];
+      totalDays += (day - 1);
+      currentLocalEpoch = totalDays * 86400LL + hour * 3600LL + min * 60LL;
+    }
+
+    CalendarTheme theme;
+    theme.drawSleepScreen(renderer, events, currentLocalEpoch);
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH, true);
+
+    int secondsToNextHour = (60 - min) * 60;
+    if (secondsToNextHour < 60) secondsToNextHour = 3600;
+    esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(secondsToNextHour) * 1000000ULL);
+
+    putTiltSensorToSleepForDeepSleep();
+    display.deepSleep();
+    powerManager.startDeepSleep(gpio);
+    return;
+  }
+#endif
+
   APP_STATE.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   if (!isNetworkResume) {

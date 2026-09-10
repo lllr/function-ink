@@ -23,6 +23,7 @@
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
 #include "home/RecentBooksGridActivity.h"
+#include "network/CalendarSyncActivity.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "network/NearbyBookTransferActivity.h"
 #include "network/NearbyStatsSyncActivity.h"
@@ -433,6 +434,7 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, const bool initialFul
   replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem, initialFullRefresh));
 }
 void ActivityManager::goToCrashReport() { replaceActivity(std::make_unique<CrashActivity>(renderer, mappedInput)); }
+void ActivityManager::goToCalendarSync() { replaceActivity(std::make_unique<CalendarSyncActivity>(renderer, mappedInput)); }
 
 void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {
   if (pendingActivity) {

@@ -142,4 +142,9 @@ class CrossPointWebServer {
   void handleGetWifiNetworks() const;
   void handlePostWifiNetwork();
   void handleDeleteWifiNetwork();
+
+  // Calendar handlers
+  void handleGetCalendars() const;
+  void handlePostCalendar();
+  void handleDeleteCalendar();
 };

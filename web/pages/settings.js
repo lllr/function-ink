@@ -525,11 +525,106 @@ let allSettings = [];
     }
   }
 
+  let calendars = [];
+
+  function renderCalendar(cal, idx) {
+    const isNew = idx === -1;
+    const id = isNew ? 'new' : idx;
+    return '<div class="opds-server" id="cal-' + id + '">' +
+      '<div class="setting-row">' +
+        '<span class="setting-name">Calendar Name</span>' +
+        '<span class="setting-control"><input type="text" id="cal-name-' + id + '" value="' + escapeHtml(cal.name || 'Google Calendar') + '"></span>' +
+      '</div>' +
+      '<div class="setting-row">' +
+        '<span class="setting-name">Secret iCal URL (.ics)</span>' +
+        '<span class="setting-control"><input type="text" id="cal-url-' + id + '" placeholder="https://calendar.google.com/.../basic.ics" value="' + escapeHtml(cal.url || '') + '"></span>' +
+      '</div>' +
+      '<div class="opds-actions">' +
+        '<button class="btn-small btn-save-server" onclick="saveCalendar(' + idx + ')">Save</button>' +
+        (isNew ? '' : '<button class="btn-small btn-delete" onclick="deleteCalendar(' + idx + ')">Delete</button>') +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderCalendarSection() {
+    const container = document.getElementById('calendar-container');
+    if (!container) return;
+    let html = '<div class="card"><h2>Google Calendar (iCal)</h2>';
+    if (calendars.length === 0) {
+      html += '<p style="color:var(--label-color);text-align:center;">No calendars configured</p>';
+    } else {
+      calendars.forEach(function(cal, idx) {
+        html += renderCalendar(cal, idx);
+      });
+    }
+    html += '<div style="margin-top:12px;text-align:center;">' +
+      '<button class="btn-small btn-add" onclick="addCalendar()">+ Add Calendar</button>' +
+    '</div></div>';
+    container.innerHTML = html;
+  }
+
+  async function loadCalendars() {
+    try {
+      const resp = await fetch('/api/calendar');
+      if (!resp.ok) throw new Error('Failed to load');
+      calendars = await resp.json();
+      renderCalendarSection();
+    } catch (e) {
+      console.error('Calendar load error:', e);
+    }
+  }
+
+  function addCalendar() {
+    const container = document.getElementById('calendar-container');
+    const card = container.querySelector('.card');
+    const addBtn = card.querySelector('.btn-add').parentElement;
+    if (document.getElementById('cal-new')) return;
+    addBtn.insertAdjacentHTML('beforebegin', renderCalendar({name:'Google Calendar',url:''}, -1));
+  }
+
+  async function saveCalendar(idx) {
+    const id = idx === -1 ? 'new' : idx;
+    const data = {
+      name: document.getElementById('cal-name-' + id).value,
+      url: document.getElementById('cal-url-' + id).value,
+    };
+    if (idx >= 0) data.index = idx;
+    try {
+      const resp = await fetch('/api/calendar', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      showMessage('Calendar saved!', false);
+      await loadCalendars();
+    } catch (e) {
+      showMessage('Error: ' + e.message, true);
+    }
+  }
+
+  async function deleteCalendar(idx) {
+    if (!confirm('Delete this calendar?')) return;
+    try {
+      const resp = await fetch('/api/calendar/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({index: idx})
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      showMessage('Calendar deleted', false);
+      await loadCalendars();
+    } catch (e) {
+      showMessage('Error: ' + e.message, true);
+    }
+  }
+
   // Sequential, not concurrent: the device's web server handles one client
-  // connection at a time, and three simultaneous fetches on page load can
+  // connection at a time, and simultaneous fetches on page load can
   // stall long enough to delay or interrupt a response.
   (async () => {
     await loadSettings();
     await loadWifiNetworks();
     await loadOpdsServers();
+    await loadCalendars();
   })();

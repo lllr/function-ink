@@ -22,12 +22,15 @@
 #include "../reader/TxtReaderActivity.h"
 #include "../reader/XtcReaderActivity.h"
 #include "AppVersion.h"
+#include "CalendarEventStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "HalClock.h"
 #include "RecentBooksStore.h"
 #include "SleepCoverAssets.h"
 #include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
+#include "components/themes/calendar/CalendarTheme.h"
 #include "components/themes/dashboard/DashboardTheme.h"
 #include "components/themes/minimal/MinimalTheme.h"
 #include "fontIds.h"
@@ -508,6 +511,8 @@ void SleepActivity::onEnter() {
       return renderMinimalStatsSleepScreen();
     case (CrossPointSettings::SLEEP_SCREEN_MODE::DASHBOARD_SLEEP):
       return renderDashboardSleepScreen();
+    case (CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_SLEEP):
+      return renderCalendarSleepScreen();
     default:
       return renderDefaultSleepScreen();
   }
@@ -799,6 +804,33 @@ void SleepActivity::renderDashboardSleepScreen() const {
   DashboardTheme theme;
   theme.drawSleepScreen(renderer, book, &bookStats, &globalStats, progressPercent, chapterTitle.c_str(),
                         sleepCoverFilterInvertsGeneratedScreen());
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH, TURN_OFF_SCREEN_AFTER_SLEEP_REFRESH);
+}
+
+void SleepActivity::renderCalendarSleepScreen() const {
+  const auto& events = CALENDAR_EVENT_STORE.getEvents();
+
+  uint16_t year = 2026;
+  uint8_t month = 1, day = 1, hour = 0, min = 0;
+  bool hasTime = halClock.isAvailable() && halClock.getDateTime(year, month, day, hour, min);
+
+  int64_t currentLocalEpoch = 0;
+  if (hasTime && year >= 2025) {
+    static const int daysInM[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    auto isLeap = [](int y) { return (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)); };
+    int64_t totalDays = 0;
+    for (int y = 1970; y < year; ++y) {
+      totalDays += isLeap(y) ? 366 : 365;
+    }
+    for (int m = 1; m < month; ++m) {
+      totalDays += (m == 2 && isLeap(year)) ? 29 : daysInM[m - 1];
+    }
+    totalDays += (day - 1);
+    currentLocalEpoch = totalDays * 86400LL + hour * 3600LL + min * 60LL;
+  }
+
+  CalendarTheme theme;
+  theme.drawSleepScreen(renderer, events, currentLocalEpoch);
   renderer.displayBuffer(HalDisplay::HALF_REFRESH, TURN_OFF_SCREEN_AFTER_SLEEP_REFRESH);
 }
 

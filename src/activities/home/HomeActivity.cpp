@@ -24,6 +24,7 @@
 #include "../reader/BookStatsActivity.h"
 #include "../reader/EpubReaderUtils.h"
 #include "BookmarkStore.h"
+#include "CalendarConfigStore.h"
 #include "ClippingStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -59,6 +60,7 @@ enum class HomeMenuAction {
   Bookmarks,
   FileTransfer,
   Settings,
+  CalendarSync,
 };
 
 struct HomeMenuEntry {
@@ -68,7 +70,7 @@ struct HomeMenuEntry {
 };
 
 struct HomeMenuEntries {
-  static constexpr int kCapacity = 8;
+  static constexpr int kCapacity = 10;
   std::array<HomeMenuEntry, kCapacity> entries{};
   int count = 0;
 
@@ -274,6 +276,10 @@ void appendHomeMenuItems(HomeMenuEntries& items, bool hasOpdsServers, bool hasRe
     items.push({savedItemsLabel(hasBookmarks, hasClippings), BookmarkIcon, HomeMenuAction::Bookmarks});
   }
 
+  if (CALENDAR_CONFIG_STORE.hasCalendars()) {
+    items.push({"Sync Calendar", Transfer, HomeMenuAction::CalendarSync});
+  }
+
   items.push({tr(STR_FILE_TRANSFER), Transfer, HomeMenuAction::FileTransfer});
   items.push({tr(STR_SETTINGS_TITLE), Settings, HomeMenuAction::Settings});
 }
@@ -296,6 +302,9 @@ HomeMenuEntries buildMinimalMenuItems(bool hasOpdsServers, bool hasReadingStats,
   }
   if (hasReadingStats) {
     items.push({tr(STR_READING_STATS), Chart, HomeMenuAction::ReadingStats});
+  }
+  if (CALENDAR_CONFIG_STORE.hasCalendars()) {
+    items.push({"Sync Calendar", Transfer, HomeMenuAction::CalendarSync});
   }
 
   items.push({tr(STR_FILE_TRANSFER), Transfer, HomeMenuAction::FileTransfer});
@@ -320,6 +329,8 @@ HomeMenuAction homeActionForInitialMenuItem(HomeMenuItem item) {
       return HomeMenuAction::RecentBooks;
     case HomeMenuItem::OPDS_BROWSER:
       return HomeMenuAction::OpdsBrowser;
+    case HomeMenuItem::CALENDAR_SYNC:
+      return HomeMenuAction::CalendarSync;
     case HomeMenuItem::FILE_TRANSFER:
       return HomeMenuAction::FileTransfer;
     case HomeMenuItem::SETTINGS_MENU:
@@ -1448,6 +1459,9 @@ void HomeActivity::loop() {
           case HomeMenuAction::FileTransfer:
             onFileTransferOpen();
             break;
+          case HomeMenuAction::CalendarSync:
+            activityManager.goToCalendarSync();
+            break;
           case HomeMenuAction::ContinueReading:
           case HomeMenuAction::Settings:
             break;
@@ -1657,6 +1671,9 @@ void HomeActivity::loop() {
         break;
       case HomeMenuAction::FileTransfer:
         onFileTransferOpen();
+        break;
+      case HomeMenuAction::CalendarSync:
+        activityManager.goToCalendarSync();
         break;
       case HomeMenuAction::Settings:
         onSettingsOpen();

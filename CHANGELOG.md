@@ -1,3 +1,13 @@
+## [Unreleased]
+
+### Added
+
+- Smart Calendar sleep screensaver with hourly timeline view, 24-hour event formatting, and multi-day preview (today + 3 days).
+- Hourly RTC deep-sleep timer wakeup for automatic calendar screensaver refresh while in sleep mode.
+- iCalendar (.ics) synchronization via Google Calendar private iCal URL or direct .ics feeds.
+- Web portal Calendar configuration in Settings page for managing iCal calendar sources.
+- Home menu "Sync Calendar" action for on-demand calendar fetching and time synchronization.
+
 ## [v1.5.0] - 2026-08-08
 
 ### Added

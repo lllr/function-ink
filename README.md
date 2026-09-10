@@ -1,37 +1,37 @@
-> **This is a personal fork of [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)** with a focus on improved fonts and minimal reading stats.
+# FunctionInk
+
+> **FunctionInk** is a personal fork of [CrossInk](https://github.com/uxjulia/CrossInk) (which itself is based on [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)). It introduces a **Smart Calendar Sleep Screensaver** with automatic hourly RTC deep-sleep wakeups and Google Calendar iCal (.ics) synchronization, turning your e-reader into an ambient, battery-efficient desktop agenda when not reading.
 
 ### Supported Devices
 
 - Xteink X3
 - Xteink X4
 - Seeed Studio Sticky
+- Xteink X4 Pro
 
-## What's different in this fork
+## What's new in FunctionInk
 
-My goal with this fork was to maintain the core Crosspoint firmware while integrating my preferred typography and some lightweight reading statistics. I’ve focused on keeping the underlying system stable while layering in a few "nice-to-have" features and UI refinements along the way.
+- **[Smart Calendar Sleep Screensaver](./docs/smart-calendar.md)**: Ambient hourly timeline view for today's schedule plus up to 3 upcoming days, with 24-hour time formatting, event duration, active event marker (`▶`), and mini-week header.
+- **Hourly RTC Deep-Sleep Wakeup**: Ultra-efficient hourly hardware timer refresh (~1 second screen update) that keeps the device asleep without draining battery.
+- **Google Calendar / iCal (.ics) Synchronization**: Streaming RFC 5545 parser that handles private Google Calendar feeds with memory bounds designed for ESP32-C3.
+- **Web Portal Calendar Settings**: Manage calendar feeds directly from the built-in browser configuration page.
+- **Home Menu One-Click Sync**: "Sync Calendar" option on the Home screen to connect Wi-Fi, update time via NTP, pull the latest events, and immediately disconnect.
 
-<table>
-  <tr>
-    <td align="center">
-      <img src="./docs/images/bitter-small-15-margin.jpg" alt="Font: Bitter, Size: 12 pt, Margin: 15" /><br/>
-      <em>Font: Bitter, Size: 12 pt, Margin: 15</em>
-    </td>
-    <td align="center">
-      <img src="./docs/images/reading-stats.jpg" alt="Reading Stats with custom front button mapping shown" /><br/>
-      <em>Reading Stats with custom front button mapping shown</em>
-    </td>
-  </tr>
-</table>
+---
+
+## What's different in CrossInk (upstream fork)
+
+Upstream CrossInk maintained the core Crosspoint firmware while integrating improved typography and lightweight reading statistics.
 
 ### Highlights
 
+- **Smart Calendar Sleep Screensaver** with hourly RTC refresh and Google Calendar sync (see [Smart Calendar Guide](./docs/smart-calendar.md)).
 - New reader fonts: Lexend Deca and Bitter.
 - Unicode emoji and miscellaneous symbols support (a limited subset).
 - Reader font sizes: 10 pt, 12 pt, 14 pt, and 16 pt.
 - Added ~~strikethrough~~ support.
 - Made <u>underlines</u> thicker for better visibility.
-- Added a custom `Minimal` theme and sleep screen option for the minimalists out there.
-- Added a custom `Dashboard` theme and sleep screen option for reading stats enthusiasts.
+- Added custom `Calendar`, `Minimal`, and `Dashboard` themes for the sleep screen.
 - Added support for `<hr>` section breaks.
 - Added support for "redaction" style rendering.
 - Added improved support for tables with simple markup.
