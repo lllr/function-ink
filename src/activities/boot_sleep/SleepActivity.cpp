@@ -813,6 +813,18 @@ void SleepActivity::renderCalendarSleepScreen() const {
   uint16_t year = 2026;
   uint8_t month = 1, day = 1, hour = 0, min = 0;
   bool hasTime = halClock.isAvailable() && halClock.getDateTime(year, month, day, hour, min);
+  if (!hasTime || year < 2025) {
+    time_t rawNow = time(nullptr);
+    struct tm* tmInfo = localtime(&rawNow);
+    if (tmInfo && tmInfo->tm_year + 1900 >= 2025) {
+      year = tmInfo->tm_year + 1900;
+      month = tmInfo->tm_mon + 1;
+      day = tmInfo->tm_mday;
+      hour = tmInfo->tm_hour;
+      min = tmInfo->tm_min;
+      hasTime = true;
+    }
+  }
 
   int64_t currentLocalEpoch = 0;
   if (hasTime && year >= 2025) {

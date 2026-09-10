@@ -156,15 +156,35 @@ void CalendarTheme::drawTimeline(GfxRenderer& renderer, const std::vector<Calend
   int currentY = startY;
   const int maxY = startY + height - 20;
 
-  if (events.empty()) {
+  // Filter out events that ended before now
+  std::vector<const CalendarEvent*> upcomingEvents;
+  upcomingEvents.reserve(events.size());
+  for (const auto& ev : events) {
+    if (ev.endTime >= currentLocalEpoch) {
+      upcomingEvents.push_back(&ev);
+    }
+  }
+
+  if (upcomingEvents.empty()) {
     renderer.drawCenteredText(UI_10_FONT_ID, startY + height / 3, "No upcoming events", true, EpdFontFamily::BOLD);
     renderer.drawCenteredText(SMALL_FONT_ID, startY + height / 3 + 28, "Sync via Home menu to update calendar", true);
     return;
   }
 
-  int lastRenderedDay = -1;
+  // Identify whether there is an active event NOW, or the first one is NEXT
+  bool hasActiveNow = false;
+  for (const auto* ev : upcomingEvents) {
+    if (ev->startTime <= currentLocalEpoch && ev->endTime >= currentLocalEpoch) {
+      hasActiveNow = true;
+      break;
+    }
+  }
 
-  for (const auto& ev : events) {
+  int lastRenderedDay = -1;
+  bool nextEventMarked = false;
+
+  for (size_t idx = 0; idx < upcomingEvents.size(); ++idx) {
+    const auto& ev = *upcomingEvents[idx];
     if (currentY >= maxY) break;
 
     const auto evStart = epochToComponents(ev.startTime);
@@ -187,18 +207,25 @@ void CalendarTheme::drawTimeline(GfxRenderer& renderer, const std::vector<Calend
                  MONTH_NAMES[evStart.month - 1], evStart.day);
       }
 
-      currentY += 8;
-      if (currentY + 20 >= maxY) break;
+      currentY += 10;
+      if (currentY + 24 >= maxY) break;
 
+      const int textW = renderer.getTextWidth(SMALL_FONT_ID, dayHeader);
       renderer.drawText(SMALL_FONT_ID, startX, currentY, dayHeader, true, EpdFontFamily::BOLD);
-      renderer.drawLine(startX + 180, currentY + 7, startX + width, currentY + 7, true);
-      currentY += 24;
+      const int lineStartX = startX + textW + 12;
+      if (lineStartX < startX + width) {
+        renderer.drawLine(lineStartX, currentY + 7, startX + width, currentY + 7, true);
+      }
+      currentY += 28;
     }
 
-    if (currentY + 45 >= maxY) break;
+    if (currentY + 48 >= maxY) break;
 
-    const bool isPast = (ev.endTime < currentLocalEpoch);
     const bool isCurrent = (ev.startTime <= currentLocalEpoch && ev.endTime >= currentLocalEpoch);
+    const bool isNext = (!hasActiveNow && !nextEventMarked && ev.startTime > currentLocalEpoch);
+    if (isNext) {
+      nextEventMarked = true;
+    }
 
     // Left column: Time and duration
     char timeStr[16];
@@ -224,10 +251,10 @@ void CalendarTheme::drawTimeline(GfxRenderer& renderer, const std::vector<Calend
       }
     }
 
-    // Active event indicator arrow
+    // Active or Next indicator
     if (isCurrent) {
       const int arrowX = startX + 2;
-      const int arrowY = currentY + 3;
+      const int arrowY = currentY + 4;
       renderer.drawLine(arrowX, arrowY, arrowX + 6, arrowY + 4, true);
       renderer.drawLine(arrowX + 6, arrowY + 4, arrowX, arrowY + 8, true);
       renderer.drawLine(arrowX, arrowY, arrowX, arrowY + 8, true);
@@ -235,44 +262,77 @@ void CalendarTheme::drawTimeline(GfxRenderer& renderer, const std::vector<Calend
 
     // Time text
     const int timeX = startX + 14;
-    renderer.drawText(UI_10_FONT_ID, timeX, currentY, timeStr, true, isCurrent ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    renderer.drawText(UI_10_FONT_ID, timeX, currentY, timeStr, true,
+                      (isCurrent || isNext) ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
     if (durStr[0] != '\0') {
-      renderer.drawText(SMALL_FONT_ID, timeX, currentY + 18, durStr, true);
+      renderer.drawText(SMALL_FONT_ID, timeX, currentY + 22, durStr, true);
     }
 
     // Vertical accent bar
-    const int barX = startX + 92;
-    const int barH = 38;
-    if (isPast) {
-      // Dotted/hatched line for past events
-      for (int dy = 0; dy < barH; dy += 4) {
-        renderer.drawPixel(barX, currentY + dy, true);
-        renderer.drawPixel(barX + 1, currentY + dy, true);
-      }
-    } else {
-      // Solid vertical bar
+    const int barX = startX + 96;
+    const int barH = 40;
+    if (isCurrent) {
+      renderer.fillRect(barX, currentY, 4, barH, true);
+    } else if (isNext) {
       renderer.fillRect(barX, currentY, 3, barH, true);
+    } else {
+      renderer.fillRect(barX, currentY, 1, barH, true);
     }
 
-    // Right column: Title and Location
-    const int detailsX = startX + 106;
-    const int maxTitleW = width - 110;
+    // Right column: Badges, Title and Location
+    const int detailsX = startX + 110;
+    int titleOffsetX = 0;
+
+    if (isCurrent) {
+      // Solid black pill with inverted white text "NOW"
+      const int badgeW = 40;
+      const int badgeH = 17;
+      const int badgeX = detailsX;
+      const int badgeY = currentY + 1;
+      renderer.fillRoundedRect(badgeX, badgeY, badgeW, badgeH, 4, Color::Black);
+      const int textW = renderer.getTextWidth(SMALL_FONT_ID, "NOW");
+      const int textH = renderer.getLineHeight(SMALL_FONT_ID);
+      renderer.drawText(SMALL_FONT_ID, badgeX + (badgeW - textW) / 2, badgeY + (badgeH - textH) / 2, "NOW", false, EpdFontFamily::BOLD);
+      titleOffsetX = badgeW + 8;
+    } else if (isNext) {
+      // Outline rounded pill with black text "NEXT"
+      const int badgeW = 44;
+      const int badgeH = 17;
+      const int badgeX = detailsX;
+      const int badgeY = currentY + 1;
+      renderer.drawRoundedRect(badgeX, badgeY, badgeW, badgeH, 1, 4, true);
+      const int textW = renderer.getTextWidth(SMALL_FONT_ID, "NEXT");
+      const int textH = renderer.getLineHeight(SMALL_FONT_ID);
+      renderer.drawText(SMALL_FONT_ID, badgeX + (badgeW - textW) / 2, badgeY + (badgeH - textH) / 2, "NEXT", true, EpdFontFamily::BOLD);
+      titleOffsetX = badgeW + 8;
+    }
+
+    const int maxTitleW = width - 116 - titleOffsetX;
     std::string truncatedTitle = renderer.truncatedText(UI_10_FONT_ID, ev.title.c_str(), maxTitleW,
-                                                        isCurrent ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-    renderer.drawText(UI_10_FONT_ID, detailsX, currentY, truncatedTitle.c_str(), true,
-                      isCurrent ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+                                                        (isCurrent || isNext) ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    renderer.drawText(UI_10_FONT_ID, detailsX + titleOffsetX, currentY, truncatedTitle.c_str(), true,
+                      (isCurrent || isNext) ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
 
     if (!ev.location.empty()) {
-      std::string truncatedLoc = renderer.truncatedText(SMALL_FONT_ID, ev.location.c_str(), maxTitleW);
-      renderer.drawText(SMALL_FONT_ID, detailsX, currentY + 18, truncatedLoc.c_str(), true);
+      std::string truncatedLoc = renderer.truncatedText(SMALL_FONT_ID, ev.location.c_str(), width - 116);
+      renderer.drawText(SMALL_FONT_ID, detailsX, currentY + 22, truncatedLoc.c_str(), true);
     }
 
-    currentY += 46;
+    currentY += 52;
   }
 }
 
 void CalendarTheme::drawSleepScreen(GfxRenderer& renderer, const std::vector<CalendarEvent>& events,
                                    int64_t currentLocalEpoch) const {
+  if (currentLocalEpoch <= 0) {
+    time_t rawNow = time(nullptr);
+    struct tm* tmInfo = localtime(&rawNow);
+    if (tmInfo && tmInfo->tm_year + 1900 >= 2025) {
+      currentLocalEpoch = toEpoch(tmInfo->tm_year + 1900, tmInfo->tm_mon + 1, tmInfo->tm_mday,
+                                  tmInfo->tm_hour, tmInfo->tm_min, tmInfo->tm_sec);
+    }
+  }
+
   renderer.clearScreen();
 
   const int screenW = renderer.getScreenWidth();
