@@ -488,6 +488,8 @@ void appendCarouselMenuStateToKey(std::string& key, const bool hasOpdsServers, c
   key += '\0';
   key += hasClippings ? "clippings:1" : "clippings:0";
   key += '\0';
+  key += CALENDAR_CONFIG_STORE.hasCalendars() ? "cal:1" : "cal:0";
+  key += '\0';
 }
 
 void buildCarouselCacheKey(const std::vector<RecentBook>& recentBooks, const bool hasOpdsServers,
@@ -617,6 +619,9 @@ int HomeActivity::getMenuItemCount() const {
     count++;
   }
   if (hasBookmarks || hasClippings) {
+    count++;
+  }
+  if (CALENDAR_CONFIG_STORE.hasCalendars()) {
     count++;
   }
   return count;
