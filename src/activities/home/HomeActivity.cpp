@@ -606,23 +606,12 @@ static_assert(HomeActivity::kMaxCachedBooks >= LyraCarouselMetrics::values.homeR
 
 int HomeActivity::getMenuItemCount() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  int count = 4;  // File Browser, Recents, File transfer, Settings
+  const auto menuItems = buildSelectableHomeMenuItems(
+      hasOpdsServers, hasReadingStats, hasBookmarks, hasClippings,
+      metrics.homeContinueReadingInMenu && !recentBooks.empty());
+  int count = static_cast<int>(menuItems.size());
   if (!metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
     count += getVisibleRecentBookCount();
-  } else if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
-    count++;  // Continue Reading menu item
-  }
-  if (hasOpdsServers) {
-    count++;
-  }
-  if (hasReadingStats) {
-    count++;
-  }
-  if (hasBookmarks || hasClippings) {
-    count++;
-  }
-  if (CALENDAR_CONFIG_STORE.hasCalendars()) {
-    count++;
   }
   return count;
 }

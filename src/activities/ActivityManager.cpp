@@ -427,6 +427,8 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, const bool initialFul
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
     } else if (activityName == "NearbyStatsSync") {
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
+    } else if (activityName == "CalendarSync") {
+      initialMenuItem = HomeMenuItem::CALENDAR_SYNC;
     } else if (activityName == "Settings") {
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
     }
