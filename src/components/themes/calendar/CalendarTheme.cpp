@@ -196,8 +196,26 @@ void CalendarTheme::drawMiniWeek(GfxRenderer& renderer, int year, int month, int
 }
 
 namespace {
+
+int calculateEventSlots(const CalendarEvent& ev, int64_t currentLocalEpoch) {
+  if (ev.allDay) return 2;
+  const auto now = epochToComponents(currentLocalEpoch);
+  const auto evEnd = epochToComponents(ev.endTime);
+  int currentHour = now.hour;
+  int endHour = evEnd.hour;
+  if (evEnd.day != now.day) {
+    endHour += 24 * (evEnd.day - now.day);
+  }
+  int slots = endHour - currentHour;
+  if (evEnd.minute > 0) {
+    slots++;
+  }
+  return std::max(1, slots);
+}
+
 void renderEventRow(GfxRenderer& renderer, const CalendarEvent& ev, const DateTimeComponents& evStart,
-                    bool isCurrent, bool isNext, bool isOpenTop, int startX, int currentY, int width, int maxY) {
+                    bool isCurrent, bool isNext, bool isOpenTop, int startX, int currentY, int width, int maxY,
+                    int cardH) {
   // Left column: Time and duration strings
   char timeStr[16];
   if (ev.allDay) {
@@ -226,33 +244,33 @@ void renderEventRow(GfxRenderer& renderer, const CalendarEvent& ev, const DateTi
   // ACTIVE EVENT "HAPPENING NOW" -> Framed Card Box
   // -------------------------------------------------------------
   if (isCurrent) {
-    // Left side: ▶ [Now] indicator
+    // Crisp filled arrow ▶
     const int arrowX = startX;
-    const int arrowY = currentY + 4;
-    renderer.drawLine(arrowX, arrowY, arrowX + 5, arrowY + 3, true);
-    renderer.drawLine(arrowX + 5, arrowY + 3, arrowX, arrowY + 6, true);
+    const int arrowY = currentY + 5;
     renderer.drawLine(arrowX, arrowY, arrowX, arrowY + 6, true);
+    renderer.drawLine(arrowX + 1, arrowY + 1, arrowX + 1, arrowY + 5, true);
+    renderer.drawLine(arrowX + 2, arrowY + 2, arrowX + 2, arrowY + 4, true);
+    renderer.drawPixel(arrowX + 3, arrowY + 3, true);
 
-    const int badgeW = 38;
+    // Outlined badge [ NOW ] matching [ NEXT ] and [ SAT ]
+    const int badgeX = startX + 8;
+    const int badgeW = 42;
     const int badgeH = 17;
-    const int badgeX = startX + 10;
-    const int badgeY = currentY + 1;
-    renderer.fillRoundedRect(badgeX, badgeY, badgeW, badgeH, 4, Color::Black);
+    renderer.drawRoundedRect(badgeX, currentY + 1, badgeW, badgeH, 1, 4, true);
     const int textW = renderer.getTextWidth(SMALL_FONT_ID, "NOW");
     const int textH = renderer.getLineHeight(SMALL_FONT_ID);
-    renderer.drawText(SMALL_FONT_ID, badgeX + (badgeW - textW) / 2, badgeY + (badgeH - textH) / 2,
-                      "NOW", false, EpdFontFamily::BOLD);
+    renderer.drawText(SMALL_FONT_ID, badgeX + (badgeW - textW) / 2, currentY + 1 + (badgeH - textH) / 2,
+                      "NOW", true, EpdFontFamily::BOLD);
 
     if (durStr[0] != '\0') {
-      renderer.drawText(SMALL_FONT_ID, startX + 10, currentY + 22, durStr, true);
+      renderer.drawText(SMALL_FONT_ID, startX + 8, currentY + 22, durStr, true);
     }
 
     // Card box on the right
     const int cardX = startX + 78;
     const int cardW = width - 78;
-    const int cardH = !ev.location.empty() ? 76 : 64;
 
-    if (currentY + cardH < maxY) {
+    if (currentY + cardH <= maxY) {
       if (isOpenTop) {
         // Ongoing event that already started in the past: keep top corners open (no top stroke)
         drawOpenTopCard(renderer, cardX, currentY, cardW, cardH, 2, 6);
@@ -402,18 +420,35 @@ void CalendarTheme::drawTimeline(GfxRenderer& renderer, const std::vector<Calend
     currentY += 32;
   } else {
     for (const auto* ev : todayEvents) {
-      const int rowH = (&*ev == activeNowEvent) ? (!ev->location.empty() ? 94 : 82) : 48;
-      if (currentY + rowH > maxTodayY) break;
-
       const auto evStart = epochToComponents(ev->startTime);
       const bool isCurrent = (&*ev == activeNowEvent);
       const bool isNext = (!activeNowEvent && !nextEventMarked && ev->startTime > currentLocalEpoch);
       if (isNext) nextEventMarked = true;
 
+      const int minCardH = !ev->location.empty() ? 76 : 64;
+      int cardH = minCardH;
+      int rowH = 48;
+
+      if (isCurrent) {
+        const int slots = calculateEventSlots(*ev, currentLocalEpoch);
+        constexpr int slotH = 48;
+        const int desiredH = slots * slotH;
+        cardH = std::max(minCardH, desiredH - 8);
+        rowH = std::max(minCardH + 12, desiredH);
+
+        // Cap to available today height so it doesn't collide with bottom future section
+        if (currentY + cardH > maxTodayY) {
+          cardH = std::max(minCardH, maxTodayY - currentY - 8);
+          rowH = maxTodayY - currentY;
+        }
+      }
+
+      if (currentY + 40 > maxTodayY) break;
+
       // Check if active event already has time in the past: keep top corners open (no top stroke)
       const bool isOpenTop = isCurrent && (ev->startTime < currentLocalEpoch);
 
-      renderEventRow(renderer, *ev, evStart, isCurrent, isNext, isOpenTop, startX, currentY, width, maxTodayY);
+      renderEventRow(renderer, *ev, evStart, isCurrent, isNext, isOpenTop, startX, currentY, width, maxTodayY, cardH);
       currentY += rowH;
     }
   }
@@ -449,7 +484,7 @@ void CalendarTheme::drawTimeline(GfxRenderer& renderer, const std::vector<Calend
       const bool isNext = (!activeNowEvent && !nextEventMarked && i == 0);
       if (isNext) nextEventMarked = true;
 
-      renderEventRow(renderer, *ev, evStart, false, isNext, false, startX, bottomY, width, maxY);
+      renderEventRow(renderer, *ev, evStart, false, isNext, false, startX, bottomY, width, maxY, 64);
       bottomY += 48;
     }
   }
