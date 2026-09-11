@@ -96,6 +96,23 @@ DateTimeComponents epochToComponents(int64_t epoch) {
   return dt;
 }
 
+void drawOpenTopCard(const GfxRenderer& renderer, int x, int y, int width, int height, int lineWidth, int radius) {
+  const int right = x + width - 1;
+  const int bottom = y + height - 1;
+  const int maxRadius = std::min({radius, width / 2, height / 2});
+
+  // Left vertical line from top down to bottom curve
+  renderer.fillRect(x, y, lineWidth, height - maxRadius, true);
+  // Right vertical line from top down to bottom curve
+  renderer.fillRect(right - lineWidth + 1, y, lineWidth, height - maxRadius, true);
+  // Bottom horizontal line between bottom curves
+  renderer.fillRect(x + maxRadius, bottom - lineWidth + 1, width - 2 * maxRadius, lineWidth, true);
+  // Bottom-left curve
+  renderer.drawArc(maxRadius, x + maxRadius, bottom - maxRadius, -1, 1, lineWidth, true);
+  // Bottom-right curve
+  renderer.drawArc(maxRadius, right - maxRadius, bottom - maxRadius, 1, 1, lineWidth, true);
+}
+
 }  // namespace
 
 void CalendarTheme::drawHeader(GfxRenderer& renderer, int year, int month, int startX, int startY, int width) const {
@@ -106,9 +123,34 @@ void CalendarTheme::drawHeader(GfxRenderer& renderer, int year, int month, int s
   // Draw month name + year in bold on the left
   renderer.drawText(UI_12_FONT_ID, startX, startY + 6, titleBuf, true, EpdFontFamily::BOLD);
 
-  // Draw battery on the top right
-  const int batteryX = startX + width - 65;
-  GUI.drawBatteryRight(renderer, Rect{batteryX, startY + 4, 38, 14}, true, true);
+  // Draw battery percentage + crisp clean icon on the top right
+  const uint16_t percentage = powerManager.getBatteryPercentage();
+  char pctBuf[16];
+  snprintf(pctBuf, sizeof(pctBuf), "%d%%", percentage);
+  const int pctW = renderer.getTextWidth(SMALL_FONT_ID, pctBuf);
+  const int pctH = renderer.getLineHeight(SMALL_FONT_ID);
+
+  const int battW = 24;
+  const int battH = 12;
+  const int battX = startX + width - battW - 2;
+  const int battY = startY + 8;
+  const int pctX = battX - pctW - 7;
+  const int pctY = battY + (battH - pctH) / 2;
+
+  // Percentage text vertically centered with battery
+  renderer.drawText(SMALL_FONT_ID, pctX, pctY, pctBuf, true);
+
+  // Battery body outline (crisp 1px rectangle)
+  renderer.drawRect(battX, battY, battW, battH, true);
+  // Battery terminal nub on the right
+  renderer.fillRect(battX + battW, battY + 3, 2, battH - 6, true);
+
+  // Battery level fill
+  const int innerW = battW - 4;
+  const int fillW = std::clamp(static_cast<int>((percentage * innerW) / 100), 0, innerW);
+  if (fillW > 0) {
+    renderer.fillRect(battX + 2, battY + 2, fillW, battH - 4, true);
+  }
 }
 
 void CalendarTheme::drawMiniWeek(GfxRenderer& renderer, int year, int month, int day, int startX, int startY,
@@ -153,150 +195,79 @@ void CalendarTheme::drawMiniWeek(GfxRenderer& renderer, int year, int month, int
   renderer.drawLine(startX, dividerY, startX + width, dividerY, true);
 }
 
-void CalendarTheme::drawTimeline(GfxRenderer& renderer, const std::vector<CalendarEvent>& events,
-                                int64_t currentLocalEpoch, int startX, int startY, int width, int height) const {
-  const auto now = epochToComponents(currentLocalEpoch);
-  int currentY = startY;
-  const int maxY = startY + height - 20;
-
-  // 1. Rolling window: Keep events that ended within the past 1 hour (windowStart) onwards
-  const int64_t windowStart = currentLocalEpoch - 3600LL;
-
-  std::vector<const CalendarEvent*> relevantEvents;
-  relevantEvents.reserve(events.size());
-  for (const auto& ev : events) {
-    if (ev.endTime >= windowStart) {
-      relevantEvents.push_back(&ev);
-    }
+namespace {
+void renderEventRow(GfxRenderer& renderer, const CalendarEvent& ev, const DateTimeComponents& evStart,
+                    bool isCurrent, bool isNext, bool isOpenTop, int startX, int currentY, int width, int maxY) {
+  // Left column: Time and duration strings
+  char timeStr[16];
+  if (ev.allDay) {
+    snprintf(timeStr, sizeof(timeStr), "All day");
+  } else {
+    snprintf(timeStr, sizeof(timeStr), "%02d:%02d", evStart.hour, evStart.minute);
   }
 
-  if (relevantEvents.empty()) {
-    renderer.drawCenteredText(UI_10_FONT_ID, startY + height / 3, "No upcoming events", true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(SMALL_FONT_ID, startY + height / 3 + 28, "Sync via Home menu to update calendar", true);
-    return;
-  }
-
-  // 2. Identify the active event happening NOW (if any)
-  const CalendarEvent* activeNowEvent = nullptr;
-  for (const auto* ev : relevantEvents) {
-    if (ev->startTime <= currentLocalEpoch && ev->endTime >= currentLocalEpoch) {
-      activeNowEvent = ev;
-      break;
-    }
-  }
-
-  int lastRenderedDay = now.day;
-  bool nextEventMarked = false;
-
-  for (size_t idx = 0; idx < relevantEvents.size(); ++idx) {
-    const auto& ev = *relevantEvents[idx];
-    if (currentY >= maxY) break;
-
-    const auto evStart = epochToComponents(ev.startTime);
-    const bool isToday = (evStart.year == now.year && evStart.month == now.month && evStart.day == now.day);
-    const int daysDiff = static_cast<int>((ev.startTime / 86400LL) - (currentLocalEpoch / 86400LL));
-    const bool isCurrent = (&ev == activeNowEvent);
-
-    // If this event is on a future day and day has changed:
-    if (!isToday && evStart.day != lastRenderedDay) {
-      lastRenderedDay = evStart.day;
-
-      currentY += 12;
-      if (currentY + 36 >= maxY) break;
-
-      // Draw Day Badge Pill (e.g. [THU] or [FRI 12])
-      char badgeText[32];
-      if (daysDiff == 1) {
-        snprintf(badgeText, sizeof(badgeText), "%s", SHORT_DAY_NAMES[evStart.dayOfWeek]);
-      } else {
-        snprintf(badgeText, sizeof(badgeText), "%s %d", SHORT_DAY_NAMES[evStart.dayOfWeek], evStart.day);
-      }
-
-      const int badgeW = renderer.getTextWidth(SMALL_FONT_ID, badgeText) + 18;
-      const int badgeH = 20;
-      renderer.drawRoundedRect(startX, currentY, badgeW, badgeH, 1, 4, true);
-      renderer.drawText(SMALL_FONT_ID, startX + 9, currentY + 3, badgeText, true, EpdFontFamily::BOLD);
-
-      // Horizontal line extending from badge to the right edge
-      renderer.drawLine(startX + badgeW + 10, currentY + badgeH / 2, startX + width, currentY + badgeH / 2, true);
-      currentY += badgeH + 14;
-    }
-
-    if (currentY + 44 >= maxY) break;
-
-    const bool isNext = (!activeNowEvent && !nextEventMarked && ev.startTime > currentLocalEpoch);
-    if (isNext) {
-      nextEventMarked = true;
-    }
-
-    // Left column: Time and duration strings
-    char timeStr[16];
-    if (ev.allDay) {
-      snprintf(timeStr, sizeof(timeStr), "All day");
+  char durStr[32];
+  if (ev.allDay) {
+    durStr[0] = '\0';
+  } else {
+    int64_t dur = ev.endTime - ev.startTime;
+    int h = static_cast<int>(dur / 3600);
+    int m = static_cast<int>((dur % 3600) / 60);
+    if (h > 0 && m > 0) {
+      snprintf(durStr, sizeof(durStr), "%d hr, %d min", h, m);
+    } else if (h > 0) {
+      snprintf(durStr, sizeof(durStr), "%d hr", h);
     } else {
-      snprintf(timeStr, sizeof(timeStr), "%02d:%02d", evStart.hour, evStart.minute);
+      snprintf(durStr, sizeof(durStr), "%d min", std::max(1, m));
+    }
+  }
+
+  // -------------------------------------------------------------
+  // ACTIVE EVENT "HAPPENING NOW" -> Framed Card Box
+  // -------------------------------------------------------------
+  if (isCurrent) {
+    // Left side: ▶ [Now] indicator
+    const int arrowX = startX;
+    const int arrowY = currentY + 4;
+    renderer.drawLine(arrowX, arrowY, arrowX + 5, arrowY + 3, true);
+    renderer.drawLine(arrowX + 5, arrowY + 3, arrowX, arrowY + 6, true);
+    renderer.drawLine(arrowX, arrowY, arrowX, arrowY + 6, true);
+
+    const int badgeW = 38;
+    const int badgeH = 17;
+    const int badgeX = startX + 10;
+    const int badgeY = currentY + 1;
+    renderer.fillRoundedRect(badgeX, badgeY, badgeW, badgeH, 4, Color::Black);
+    const int textW = renderer.getTextWidth(SMALL_FONT_ID, "NOW");
+    const int textH = renderer.getLineHeight(SMALL_FONT_ID);
+    renderer.drawText(SMALL_FONT_ID, badgeX + (badgeW - textW) / 2, badgeY + (badgeH - textH) / 2,
+                      "NOW", false, EpdFontFamily::BOLD);
+
+    if (durStr[0] != '\0') {
+      renderer.drawText(SMALL_FONT_ID, startX + 10, currentY + 22, durStr, true);
     }
 
-    char durStr[32];
-    if (ev.allDay) {
-      durStr[0] = '\0';
-    } else {
-      int64_t dur = ev.endTime - ev.startTime;
-      int h = static_cast<int>(dur / 3600);
-      int m = static_cast<int>((dur % 3600) / 60);
-      if (h > 0 && m > 0) {
-        snprintf(durStr, sizeof(durStr), "%d hr, %d min", h, m);
-      } else if (h > 0) {
-        snprintf(durStr, sizeof(durStr), "%d hr", h);
+    // Card box on the right
+    const int cardX = startX + 78;
+    const int cardW = width - 78;
+    const int cardH = !ev.location.empty() ? 76 : 64;
+
+    if (currentY + cardH < maxY) {
+      if (isOpenTop) {
+        // Ongoing event that already started in the past: keep top corners open (no top stroke)
+        drawOpenTopCard(renderer, cardX, currentY, cardW, cardH, 2, 6);
       } else {
-        snprintf(durStr, sizeof(durStr), "%d min", std::max(1, m));
-      }
-    }
-
-    // -------------------------------------------------------------
-    // CASE A: ACTIVE EVENT "HAPPENING NOW" -> Framed Card Box
-    // -------------------------------------------------------------
-    if (isCurrent) {
-      // Left side: ▶ [Now] or ▶ 16:00
-      const int arrowX = startX;
-      const int arrowY = currentY + 4;
-      renderer.drawLine(arrowX, arrowY, arrowX + 5, arrowY + 3, true);
-      renderer.drawLine(arrowX + 5, arrowY + 3, arrowX, arrowY + 6, true);
-      renderer.drawLine(arrowX, arrowY, arrowX, arrowY + 6, true);
-
-      // Now badge pill on the left
-      const int badgeW = 38;
-      const int badgeH = 17;
-      const int badgeX = startX + 10;
-      const int badgeY = currentY + 1;
-      renderer.fillRoundedRect(badgeX, badgeY, badgeW, badgeH, 4, Color::Black);
-      const int textW = renderer.getTextWidth(SMALL_FONT_ID, "NOW");
-      const int textH = renderer.getLineHeight(SMALL_FONT_ID);
-      renderer.drawText(SMALL_FONT_ID, badgeX + (badgeW - textW) / 2, badgeY + (badgeH - textH) / 2,
-                        "NOW", false, EpdFontFamily::BOLD);
-
-      if (durStr[0] != '\0') {
-        renderer.drawText(SMALL_FONT_ID, startX + 10, currentY + 22, durStr, true);
+        renderer.drawRoundedRect(cardX, currentY, cardW, cardH, 2, 6, true);
       }
 
-      // Card box on the right
-      const int cardX = startX + 78;
-      const int cardW = width - 78;
-      const int cardH = !ev.location.empty() ? 76 : 64;
-
-      if (currentY + cardH >= maxY) break;
-
-      // Draw rounded card border (2px)
-      renderer.drawRoundedRect(cardX, currentY, cardW, cardH, 2, 6, true);
-
-      // Event title inside card (prominent bold)
+      // Title inside card
       const int innerPadX = 14;
       const int innerPadY = 12;
       const int maxTitleW = cardW - innerPadX * 2;
       std::string truncatedTitle = renderer.truncatedText(UI_12_FONT_ID, ev.title.c_str(), maxTitleW, EpdFontFamily::BOLD);
       renderer.drawText(UI_12_FONT_ID, cardX + innerPadX, currentY + innerPadY, truncatedTitle.c_str(), true, EpdFontFamily::BOLD);
 
-      // Subtitle: Time range & location
+      // Subtitle inside card: Time range & location
       char subBuf[64];
       if (!ev.allDay) {
         const auto evEnd = epochToComponents(ev.endTime);
@@ -315,54 +286,171 @@ void CalendarTheme::drawTimeline(GfxRenderer& renderer, const std::vector<Calend
         std::string truncatedSub = renderer.truncatedText(SMALL_FONT_ID, subBuf, maxTitleW);
         renderer.drawText(SMALL_FONT_ID, cardX + innerPadX, currentY + innerPadY + 24, truncatedSub.c_str(), true);
       }
-
-      currentY += cardH + 16;
     }
-    // -------------------------------------------------------------
-    // CASE B: UPCOMING OR FUTURE EVENT -> Clean Timeline Row
-    // -------------------------------------------------------------
-    else {
-      // Time text on left
-      const int timeX = startX + 10;
-      renderer.drawText(UI_10_FONT_ID, timeX, currentY, timeStr, true,
-                        isNext ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-      if (durStr[0] != '\0') {
-        renderer.drawText(SMALL_FONT_ID, timeX, currentY + 22, durStr, true);
+  }
+  // -------------------------------------------------------------
+  // UPCOMING OR FUTURE EVENT -> Clean Row
+  // -------------------------------------------------------------
+  else {
+    const int timeX = startX + 10;
+    renderer.drawText(UI_10_FONT_ID, timeX, currentY, timeStr, true,
+                      isNext ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    if (durStr[0] != '\0') {
+      renderer.drawText(SMALL_FONT_ID, timeX, currentY + 22, durStr, true);
+    }
+
+    // Vertical separator bar
+    const int barX = startX + 78;
+    const int barH = 38;
+    renderer.fillRect(barX, currentY, isNext ? 3 : 2, barH, true);
+
+    // Title & location on right
+    const int detailsX = startX + 90;
+    int titleOffsetX = 0;
+
+    if (isNext) {
+      const int badgeW = 42;
+      const int badgeH = 17;
+      renderer.drawRoundedRect(detailsX, currentY + 1, badgeW, badgeH, 1, 4, true);
+      const int textW = renderer.getTextWidth(SMALL_FONT_ID, "NEXT");
+      const int textH = renderer.getLineHeight(SMALL_FONT_ID);
+      renderer.drawText(SMALL_FONT_ID, detailsX + (badgeW - textW) / 2, currentY + 1 + (badgeH - textH) / 2,
+                        "NEXT", true, EpdFontFamily::BOLD);
+      titleOffsetX = badgeW + 8;
+    }
+
+    const int maxTitleW = width - 90 - titleOffsetX;
+    std::string truncatedTitle = renderer.truncatedText(UI_10_FONT_ID, ev.title.c_str(), maxTitleW,
+                                                        isNext ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    renderer.drawText(UI_10_FONT_ID, detailsX + titleOffsetX, currentY, truncatedTitle.c_str(), true,
+                      isNext ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+
+    if (!ev.location.empty()) {
+      std::string truncatedLoc = renderer.truncatedText(SMALL_FONT_ID, ev.location.c_str(), width - 90);
+      renderer.drawText(SMALL_FONT_ID, detailsX, currentY + 22, truncatedLoc.c_str(), true);
+    }
+  }
+}
+}  // namespace
+
+void CalendarTheme::drawTimeline(GfxRenderer& renderer, const std::vector<CalendarEvent>& events,
+                                int64_t currentLocalEpoch, int startX, int startY, int width, int height) const {
+  const auto now = epochToComponents(currentLocalEpoch);
+  const int maxY = startY + height - 16;
+
+  // 1. Keep events that ended within the past 1 hour onwards
+  const int64_t windowStart = currentLocalEpoch - 3600LL;
+
+  std::vector<const CalendarEvent*> todayEvents;
+  std::vector<const CalendarEvent*> futureEvents;
+  todayEvents.reserve(events.size());
+  futureEvents.reserve(events.size());
+
+  for (const auto& ev : events) {
+    if (ev.endTime < windowStart) continue;
+    const auto evStart = epochToComponents(ev.startTime);
+    const bool isToday = (evStart.year == now.year && evStart.month == now.month && evStart.day == now.day);
+    if (isToday) {
+      todayEvents.push_back(&ev);
+    } else {
+      futureEvents.push_back(&ev);
+    }
+  }
+
+  if (todayEvents.empty() && futureEvents.empty()) {
+    renderer.drawCenteredText(UI_10_FONT_ID, startY + height / 3, "No upcoming events", true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(SMALL_FONT_ID, startY + height / 3 + 28, "Sync via Home menu to update calendar", true);
+    return;
+  }
+
+  // Active event happening NOW (if any)
+  const CalendarEvent* activeNowEvent = nullptr;
+  for (const auto* ev : todayEvents) {
+    if (ev->startTime <= currentLocalEpoch && ev->endTime >= currentLocalEpoch) {
+      activeNowEvent = ev;
+      break;
+    }
+  }
+
+  // Calculate bottom section height for future events (if any)
+  int futureSectionH = 0;
+  int futureEventsToDraw = 0;
+  if (!futureEvents.empty()) {
+    futureSectionH = 34;  // Day badge + horizontal line
+    const int firstFutureDay = epochToComponents(futureEvents[0]->startTime).day;
+    for (const auto* ev : futureEvents) {
+      if (epochToComponents(ev->startTime).day == firstFutureDay && futureEventsToDraw < 2) {
+        futureSectionH += 48;
+        futureEventsToDraw++;
+      } else {
+        break;
       }
+    }
+  }
 
-      // Vertical separator bar
-      const int barX = startX + 78;
-      const int barH = 38;
-      renderer.fillRect(barX, currentY, isNext ? 3 : 2, barH, true);
+  const int futureStartY = futureSectionH > 0 ? (maxY - futureSectionH) : maxY;
+  const int maxTodayY = futureSectionH > 0 ? (futureStartY - 16) : maxY;
 
-      // Title & location on right
-      const int detailsX = startX + 90;
-      int titleOffsetX = 0;
+  // -------------------------------------------------------------
+  // 1. Render TODAY's events from the top
+  // -------------------------------------------------------------
+  int currentY = startY;
+  bool nextEventMarked = false;
 
-      if (isNext) {
-        // Outline rounded pill [NEXT]
-        const int badgeW = 42;
-        const int badgeH = 17;
-        renderer.drawRoundedRect(detailsX, currentY + 1, badgeW, badgeH, 1, 4, true);
-        const int textW = renderer.getTextWidth(SMALL_FONT_ID, "NEXT");
-        const int textH = renderer.getLineHeight(SMALL_FONT_ID);
-        renderer.drawText(SMALL_FONT_ID, detailsX + (badgeW - textW) / 2, currentY + 1 + (badgeH - textH) / 2,
-                          "NEXT", true, EpdFontFamily::BOLD);
-        titleOffsetX = badgeW + 8;
-      }
+  if (todayEvents.empty()) {
+    renderer.drawText(SMALL_FONT_ID, startX + 10, currentY + 8, "No remaining events today", true);
+    currentY += 32;
+  } else {
+    for (const auto* ev : todayEvents) {
+      const int rowH = (&*ev == activeNowEvent) ? (!ev->location.empty() ? 94 : 82) : 48;
+      if (currentY + rowH > maxTodayY) break;
 
-      const int maxTitleW = width - 90 - titleOffsetX;
-      std::string truncatedTitle = renderer.truncatedText(UI_10_FONT_ID, ev.title.c_str(), maxTitleW,
-                                                          isNext ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-      renderer.drawText(UI_10_FONT_ID, detailsX + titleOffsetX, currentY, truncatedTitle.c_str(), true,
-                        isNext ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+      const auto evStart = epochToComponents(ev->startTime);
+      const bool isCurrent = (&*ev == activeNowEvent);
+      const bool isNext = (!activeNowEvent && !nextEventMarked && ev->startTime > currentLocalEpoch);
+      if (isNext) nextEventMarked = true;
 
-      if (!ev.location.empty()) {
-        std::string truncatedLoc = renderer.truncatedText(SMALL_FONT_ID, ev.location.c_str(), width - 90);
-        renderer.drawText(SMALL_FONT_ID, detailsX, currentY + 22, truncatedLoc.c_str(), true);
-      }
+      // Check if active event already has time in the past: keep top corners open (no top stroke)
+      const bool isOpenTop = isCurrent && (ev->startTime < currentLocalEpoch);
 
-      currentY += 48;
+      renderEventRow(renderer, *ev, evStart, isCurrent, isNext, isOpenTop, startX, currentY, width, maxTodayY);
+      currentY += rowH;
+    }
+  }
+
+  // -------------------------------------------------------------
+  // 2. Render FUTURE events attached to the BOTTOM
+  // -------------------------------------------------------------
+  if (futureSectionH > 0 && futureEventsToDraw > 0) {
+    int bottomY = futureStartY;
+    const auto firstEvStart = epochToComponents(futureEvents[0]->startTime);
+    const int daysDiff = static_cast<int>((futureEvents[0]->startTime / 86400LL) - (currentLocalEpoch / 86400LL));
+
+    // Draw Day Badge Pill, e.g. [THU] or [FRI 12]
+    char badgeText[32];
+    if (daysDiff == 1) {
+      snprintf(badgeText, sizeof(badgeText), "%s", SHORT_DAY_NAMES[firstEvStart.dayOfWeek]);
+    } else {
+      snprintf(badgeText, sizeof(badgeText), "%s %d", SHORT_DAY_NAMES[firstEvStart.dayOfWeek], firstEvStart.day);
+    }
+
+    const int badgeW = renderer.getTextWidth(SMALL_FONT_ID, badgeText) + 18;
+    const int badgeH = 20;
+    renderer.drawRoundedRect(startX, bottomY, badgeW, badgeH, 1, 4, true);
+    renderer.drawText(SMALL_FONT_ID, startX + 9, bottomY + 3, badgeText, true, EpdFontFamily::BOLD);
+
+    // Connecting horizontal line
+    renderer.drawLine(startX + badgeW + 10, bottomY + badgeH / 2, startX + width, bottomY + badgeH / 2, true);
+    bottomY += badgeH + 14;
+
+    for (int i = 0; i < futureEventsToDraw; ++i) {
+      const auto* ev = futureEvents[i];
+      const auto evStart = epochToComponents(ev->startTime);
+      const bool isNext = (!activeNowEvent && !nextEventMarked && i == 0);
+      if (isNext) nextEventMarked = true;
+
+      renderEventRow(renderer, *ev, evStart, false, isNext, false, startX, bottomY, width, maxY);
+      bottomY += 48;
     }
   }
 }
