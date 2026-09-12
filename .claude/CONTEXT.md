@@ -19,6 +19,12 @@ Refer to https://freeink.org/llms.txt for guidance.
 
 ## Real Hardware / Storage
 
+- **ESP32-C3 constraints (Xteink X4)**:
+  - Single-core RISC-V @ 160 MHz, **no PSRAM**.
+  - Internal RAM: ~380 KB total SRAM, but only **~50-60 KB free heap** when Wi-Fi and TLS/wolfSSL are active.
+  - **Zero-heap streaming mandatory**: Never accumulate network payloads (HTTP responses, ICS feeds) into contiguous `std::string` or buffers. Always process chunk-by-chunk via streaming parsers.
+  - **No external RTC chip**: The Xteink X4 has no I2C RTC chip (`[CLK] RTC not found`). Timekeeping depends strictly on ESP-IDF SNTP and internal RTC timer preserved across deep sleep.
+  - Framebuffer: 800x480 1-bit monochrome = 48,000 bytes in internal SRAM.
 - SdFat on hardware allows only one open reader per file path at a time. If a fallback needs to reopen the same file, close the first handle before reopening.
 
 ## Rendering / Reader Pipeline
