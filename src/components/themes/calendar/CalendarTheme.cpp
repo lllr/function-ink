@@ -393,7 +393,25 @@ void CalendarTheme::drawTimeline(GfxRenderer& renderer, const std::vector<Calend
   // Calculate bottom section height for future events (if any)
   int futureSectionH = 0;
   int futureEventsToDraw = 0;
+
+  bool shouldShowFuture = false;
   if (!futureEvents.empty()) {
+    const int64_t secToFuture = futureEvents[0]->startTime - currentLocalEpoch;
+    if (todayEvents.empty()) {
+      shouldShowFuture = true;
+    } else {
+      // Only show future events if:
+      // 1. First future event is within 14 hours
+      // 2. Today's last event ends within 6 hours (day is winding down / evening)
+      const auto* lastTodayEv = todayEvents.back();
+      const int64_t secToLastEnd = lastTodayEv->endTime - currentLocalEpoch;
+      if (secToFuture <= 14 * 3600LL && secToLastEnd <= 6 * 3600LL) {
+        shouldShowFuture = true;
+      }
+    }
+  }
+
+  if (shouldShowFuture) {
     futureSectionH = 34;  // Day badge + horizontal line
     const int firstFutureDay = epochToComponents(futureEvents[0]->startTime).day;
     for (const auto* ev : futureEvents) {
@@ -419,11 +437,53 @@ void CalendarTheme::drawTimeline(GfxRenderer& renderer, const std::vector<Calend
     renderer.drawText(SMALL_FONT_ID, startX + 10, currentY + 8, "No remaining events today", true);
     currentY += 32;
   } else {
-    for (const auto* ev : todayEvents) {
+    int64_t timelineCursorEpoch = currentLocalEpoch;
+
+    // If no event is currently active, draw the NOW marker at startY
+    if (!activeNowEvent) {
+      char nowTimeBuf[16];
+      snprintf(nowTimeBuf, sizeof(nowTimeBuf), "%02d:%02d", now.hour, now.minute);
+
+      const int arrowX = startX;
+      const int arrowY = currentY + 5;
+      renderer.drawLine(arrowX, arrowY, arrowX, arrowY + 6, true);
+      renderer.drawLine(arrowX + 1, arrowY + 1, arrowX + 1, arrowY + 5, true);
+      renderer.drawLine(arrowX + 2, arrowY + 2, arrowX + 2, arrowY + 4, true);
+      renderer.drawPixel(arrowX + 3, arrowY + 3, true);
+
+      const int timeX = startX + 10;
+      renderer.drawText(UI_10_FONT_ID, timeX, currentY, nowTimeBuf, true, EpdFontFamily::BOLD);
+      renderer.drawText(SMALL_FONT_ID, timeX, currentY + 22, "NOW", true);
+
+      // Subtle horizontal line across from timeline bar to screen right
+      const int lineX = startX + 78;
+      renderer.drawLine(lineX, currentY + 10, startX + width, currentY + 10, true);
+
+      currentY += 44;
+    }
+
+    for (size_t evIdx = 0; evIdx < todayEvents.size(); ++evIdx) {
+      const auto* ev = todayEvents[evIdx];
       const auto evStart = epochToComponents(ev->startTime);
       const bool isCurrent = (&*ev == activeNowEvent);
       const bool isNext = (!activeNowEvent && !nextEventMarked && ev->startTime > currentLocalEpoch);
       if (isNext) nextEventMarked = true;
+
+      // Calculate time gap before this event
+      if (!isCurrent && ev->startTime > timelineCursorEpoch) {
+        const int64_t gapSec = ev->startTime - timelineCursorEpoch;
+        const double gapHours = static_cast<double>(gapSec) / 3600.0;
+        constexpr int slotH = 48;
+        int gapH = static_cast<int>(gapHours * slotH);
+
+        // Ensure we don't push remaining events off screen
+        const int remainingEventsCount = static_cast<int>(todayEvents.size() - evIdx);
+        const int minNeeded = remainingEventsCount * 48;
+        const int maxAllowedGap = std::max(0, maxTodayY - currentY - minNeeded);
+        gapH = std::min(gapH, maxAllowedGap);
+
+        currentY += gapH;
+      }
 
       const int minCardH = !ev->location.empty() ? 76 : 64;
       int cardH = minCardH;
@@ -450,6 +510,9 @@ void CalendarTheme::drawTimeline(GfxRenderer& renderer, const std::vector<Calend
 
       renderEventRow(renderer, *ev, evStart, isCurrent, isNext, isOpenTop, startX, currentY, width, maxTodayY, cardH);
       currentY += rowH;
+
+      // Update timeline cursor to this event's end time
+      timelineCursorEpoch = std::max(timelineCursorEpoch, ev->endTime);
     }
   }
 
