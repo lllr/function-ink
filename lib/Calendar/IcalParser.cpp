@@ -98,81 +98,143 @@ int64_t IcalParser::parseDateTime(const std::string& rawStr, int utcOffsetSecond
   return epoch;
 }
 
+IcalStreamParser::IcalStreamParser(int utcOffsetSeconds, int64_t minLocalEpoch, int64_t maxLocalEpoch,
+                                   std::vector<CalendarEvent>& outEvents, size_t maxCapacity)
+    : utcOffsetSeconds_(utcOffsetSeconds),
+      minLocalEpoch_(minLocalEpoch),
+      maxLocalEpoch_(maxLocalEpoch),
+      outEvents_(outEvents),
+      maxCapacity_(maxCapacity) {
+  lineBuffer_.reserve(256);
+}
+
+void IcalStreamParser::feed(const char* data, size_t len) {
+  for (size_t i = 0; i < len; ++i) {
+    const char c = data[i];
+    if (state_ == State::SAW_CR) {
+      if (c == '\n') {
+        state_ = State::SAW_LF;
+        continue;
+      }
+      if (c == ' ' || c == '\t') {
+        state_ = State::ACCUMULATING;
+        continue;
+      }
+      processLine(lineBuffer_);
+      lineBuffer_.clear();
+      state_ = State::ACCUMULATING;
+      if (c == '\r') {
+        state_ = State::SAW_CR;
+        continue;
+      }
+      lineBuffer_.push_back(c);
+    } else if (state_ == State::SAW_LF) {
+      if (c == ' ' || c == '\t') {
+        state_ = State::ACCUMULATING;
+        continue;
+      }
+      processLine(lineBuffer_);
+      lineBuffer_.clear();
+      state_ = State::ACCUMULATING;
+      if (c == '\r') {
+        state_ = State::SAW_CR;
+        continue;
+      }
+      if (c == '\n') {
+        state_ = State::SAW_LF;
+        continue;
+      }
+      lineBuffer_.push_back(c);
+    } else {
+      if (c == '\r') {
+        state_ = State::SAW_CR;
+      } else if (c == '\n') {
+        state_ = State::SAW_LF;
+      } else {
+        if (lineBuffer_.size() < 1024) {
+          lineBuffer_.push_back(c);
+        }
+      }
+    }
+  }
+}
+
+void IcalStreamParser::processLine(const std::string& line) {
+  if (line == "BEGIN:VEVENT") {
+    inVEvent_ = true;
+    currentEvent_ = CalendarEvent{};
+    return;
+  }
+
+  if (line == "END:VEVENT") {
+    if (inVEvent_ && !currentEvent_.title.empty()) {
+      if (currentEvent_.endTime <= 0) {
+        currentEvent_.endTime = currentEvent_.allDay ? (currentEvent_.startTime + 86400LL) : (currentEvent_.startTime + 3600LL);
+      }
+      if (currentEvent_.endTime >= minLocalEpoch_ && currentEvent_.startTime <= maxLocalEpoch_) {
+        if (outEvents_.size() < maxCapacity_) {
+          outEvents_.push_back(currentEvent_);
+        }
+      }
+    }
+    inVEvent_ = false;
+    return;
+  }
+
+  if (!inVEvent_) return;
+
+  if (line.rfind("SUMMARY", 0) == 0) {
+    currentEvent_.title = IcalParser::unescapeText(getPropertyValue(line));
+  } else if (line.rfind("LOCATION", 0) == 0) {
+    currentEvent_.location = IcalParser::unescapeText(getPropertyValue(line));
+  } else if (line.rfind("DTSTART", 0) == 0) {
+    bool isAllDay = false;
+    currentEvent_.startTime = IcalParser::parseDateTime(getPropertyValue(line), utcOffsetSeconds_, isAllDay);
+    if (isAllDay) currentEvent_.allDay = true;
+  } else if (line.rfind("DTEND", 0) == 0) {
+    bool isAllDay = false;
+    currentEvent_.endTime = IcalParser::parseDateTime(getPropertyValue(line), utcOffsetSeconds_, isAllDay);
+  } else if (line.rfind("DURATION", 0) == 0) {
+    std::string val = getPropertyValue(line);
+    int64_t durSec = 0;
+    int curNum = 0;
+    for (char ch : val) {
+      if (std::isdigit(ch)) {
+        curNum = curNum * 10 + (ch - '0');
+      } else if (ch == 'H') {
+        durSec += curNum * 3600LL;
+        curNum = 0;
+      } else if (ch == 'M') {
+        durSec += curNum * 60LL;
+        curNum = 0;
+      } else if (ch == 'S') {
+        durSec += curNum;
+        curNum = 0;
+      } else if (ch == 'D') {
+        durSec += curNum * 86400LL;
+        curNum = 0;
+      }
+    }
+    if (durSec > 0 && currentEvent_.endTime <= 0) {
+      currentEvent_.endTime = currentEvent_.startTime + durSec;
+    }
+  }
+}
+
+void IcalStreamParser::finish() {
+  if (!lineBuffer_.empty()) {
+    processLine(lineBuffer_);
+    lineBuffer_.clear();
+  }
+  std::sort(outEvents_.begin(), outEvents_.end(),
+            [](const CalendarEvent& a, const CalendarEvent& b) { return a.startTime < b.startTime; });
+}
+
 bool IcalParser::parse(const std::string& icsData, int utcOffsetSeconds, int64_t minLocalEpoch, int64_t maxLocalEpoch,
                        std::vector<CalendarEvent>& outEvents, size_t maxCapacity) {
   if (icsData.empty()) return false;
-
-  // Step 1: Unfold lines
-  std::vector<std::string> lines;
-  lines.reserve(128);
-
-  std::stringstream ss(icsData);
-  std::string rawLine;
-  while (std::getline(ss, rawLine)) {
-    // Strip trailing \r
-    while (!rawLine.empty() && (rawLine.back() == '\r' || rawLine.back() == ' ')) {
-      rawLine.pop_back();
-    }
-    if (rawLine.empty()) continue;
-
-    if ((rawLine[0] == ' ' || rawLine[0] == '\t') && !lines.empty()) {
-      // Continuation of previous line
-      lines.back().append(rawLine.substr(1));
-    } else {
-      lines.push_back(rawLine);
-    }
-  }
-
-  // Step 2: Parse VEVENT components
-  bool inVEvent = false;
-  CalendarEvent currentEvent;
-
-  for (const auto& line : lines) {
-    if (line == "BEGIN:VEVENT") {
-      inVEvent = true;
-      currentEvent = CalendarEvent{};
-      continue;
-    }
-
-    if (line == "END:VEVENT") {
-      if (inVEvent && !currentEvent.title.empty()) {
-        if (currentEvent.endTime <= 0) {
-          // Default duration: 1 hour if not specified, or end of day if all-day
-          currentEvent.endTime = currentEvent.allDay ? (currentEvent.startTime + 86400LL) : (currentEvent.startTime + 3600LL);
-        }
-
-        // Check if event overlaps with [minLocalEpoch, maxLocalEpoch]
-        if (currentEvent.endTime >= minLocalEpoch && currentEvent.startTime <= maxLocalEpoch) {
-          if (outEvents.size() < maxCapacity) {
-            outEvents.push_back(currentEvent);
-          }
-        }
-      }
-      inVEvent = false;
-      continue;
-    }
-
-    if (!inVEvent) continue;
-
-    if (line.rfind("SUMMARY", 0) == 0) {
-      currentEvent.title = unescapeText(getPropertyValue(line));
-    } else if (line.rfind("LOCATION", 0) == 0) {
-      currentEvent.location = unescapeText(getPropertyValue(line));
-    } else if (line.rfind("DESCRIPTION", 0) == 0) {
-      currentEvent.description = unescapeText(getPropertyValue(line));
-    } else if (line.rfind("DTSTART", 0) == 0) {
-      bool isAllDay = false;
-      currentEvent.startTime = parseDateTime(getPropertyValue(line), utcOffsetSeconds, isAllDay);
-      if (isAllDay) currentEvent.allDay = true;
-    } else if (line.rfind("DTEND", 0) == 0) {
-      bool isAllDay = false;
-      currentEvent.endTime = parseDateTime(getPropertyValue(line), utcOffsetSeconds, isAllDay);
-    }
-  }
-
-  // Sort events chronologically
-  std::sort(outEvents.begin(), outEvents.end(),
-            [](const CalendarEvent& a, const CalendarEvent& b) { return a.startTime < b.startTime; });
-
-  return true;
+  IcalStreamParser parser(utcOffsetSeconds, minLocalEpoch, maxLocalEpoch, outEvents, maxCapacity);
+  parser.feed(icsData.data(), icsData.size());
+  parser.finish();
+  return !outEvents.empty();
 }

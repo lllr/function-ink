@@ -127,7 +127,10 @@ bool CalendarSyncActivity::fetchAndParse(const std::string& url, int utcOffsetSe
   if (code == 200) {
     String payload = http.getString();
     http.end();
-    return IcalParser::parse(payload.c_str(), utcOffsetSeconds, minEpoch, maxEpoch, outEvents);
+    IcalStreamParser parser(utcOffsetSeconds, minEpoch, maxEpoch, outEvents);
+    parser.feed(payload.c_str(), payload.length());
+    parser.finish();
+    return true;
   }
   http.end();
   LOG_ERR("CAL", "HTTP GET failed with code: %d", code);
@@ -140,18 +143,16 @@ bool CalendarSyncActivity::fetchAndParse(const std::string& url, int utcOffsetSe
     LOG_ERR("CAL", "Failed to parse URL: %s", url.c_str());
     return false;
   }
-  std::string responseBody;
-  auto dataCb = [&responseBody](const uint8_t* data, size_t len) -> bool {
-    if (responseBody.size() + len > 131072) {
-      return false;  // Safeguard against very large files
-    }
-    responseBody.append(reinterpret_cast<const char*>(data), len);
+  IcalStreamParser parser(utcOffsetSeconds, minEpoch, maxEpoch, outEvents);
+  auto dataCb = [&parser](const uint8_t* data, size_t len) -> bool {
+    parser.feed(reinterpret_cast<const char*>(data), len);
     return true;
   };
   int code = http.GET(dataCb);
+  parser.finish();
   http.end();
-  if (code == 200 && !responseBody.empty()) {
-    return IcalParser::parse(responseBody, utcOffsetSeconds, minEpoch, maxEpoch, outEvents);
+  if (code == 200) {
+    return true;
   }
   LOG_ERR("CAL", "SecureHttpClient GET failed with code: %d", code);
   return false;
@@ -172,6 +173,7 @@ void CalendarSyncActivity::performSync() {
 
   if (!connectWifi()) {
     state = ERROR_STATE;
+    errorMessage = "Failed to connect to Wi-Fi";
     requestUpdate();
     return;
   }
@@ -224,16 +226,15 @@ void CalendarSyncActivity::performSync() {
   // Also check if manual /manual_calendar.ics exists on SD
   FsFile manualFile;
   if (Storage.openFileForRead("CAL", "/manual_calendar.ics", manualFile)) {
-    std::string content;
-    const size_t sz = manualFile.size();
-    if (sz > 0 && sz < 131072) {
-      content.resize(sz);
-      manualFile.read(&content[0], sz);
-      if (IcalParser::parse(content, utcOffsetSeconds, minEpoch, maxEpoch, allEvents)) {
-        anySuccess = true;
-      }
+    IcalStreamParser parser(utcOffsetSeconds, minEpoch, maxEpoch, allEvents);
+    char buf[512];
+    while (int r = manualFile.read(buf, sizeof(buf))) {
+      if (r <= 0) break;
+      parser.feed(buf, r);
     }
+    parser.finish();
     manualFile.close();
+    anySuccess = true;
   }
 
   WiFi.disconnect(true);

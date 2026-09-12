@@ -6,6 +6,35 @@
 
 #include "CalendarEvent.h"
 
+class IcalStreamParser {
+ public:
+  IcalStreamParser(int utcOffsetSeconds, int64_t minLocalEpoch, int64_t maxLocalEpoch,
+                   std::vector<CalendarEvent>& outEvents, size_t maxCapacity = 50);
+
+  void feed(const char* data, size_t len);
+  void finish();
+
+ private:
+  enum class State {
+    ACCUMULATING,
+    SAW_CR,
+    SAW_LF
+  };
+
+  int utcOffsetSeconds_;
+  int64_t minLocalEpoch_;
+  int64_t maxLocalEpoch_;
+  std::vector<CalendarEvent>& outEvents_;
+  size_t maxCapacity_;
+
+  State state_ = State::ACCUMULATING;
+  std::string lineBuffer_;
+  bool inVEvent_ = false;
+  CalendarEvent currentEvent_;
+
+  void processLine(const std::string& line);
+};
+
 class IcalParser {
  public:
   /**
