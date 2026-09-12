@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "CrossPointSettings.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -557,10 +558,9 @@ void CalendarTheme::drawSleepScreen(GfxRenderer& renderer, const std::vector<Cal
                                    int64_t currentLocalEpoch) const {
   if (currentLocalEpoch <= 0) {
     time_t rawNow = time(nullptr);
-    struct tm* tmInfo = localtime(&rawNow);
-    if (tmInfo && tmInfo->tm_year + 1900 >= 2025) {
-      currentLocalEpoch = toEpoch(tmInfo->tm_year + 1900, tmInfo->tm_mon + 1, tmInfo->tm_mday,
-                                  tmInfo->tm_hour, tmInfo->tm_min, tmInfo->tm_sec);
+    if (rawNow >= 1735689600) {
+      const int utcOffsetSeconds = (SETTINGS.clockUtcOffsetQ - 48) * 15 * 60;
+      currentLocalEpoch = static_cast<int64_t>(rawNow) + utcOffsetSeconds;
     }
   }
 

@@ -703,8 +703,21 @@ void enterDeepSleep(bool fromTimeout) {
   LOG_DBG("MAIN", "Entering deep sleep");
 
   if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_SLEEP) {
-    uint8_t hour = 0, minute = 0;
-    if (halClock.isAvailable() && halClock.getTime(hour, minute)) {
+    int minute = -1;
+    time_t rawNow = time(nullptr);
+    if (rawNow >= 1735689600) {
+      const int utcOffsetSeconds = (SETTINGS.clockUtcOffsetQ - 48) * 15 * 60;
+      int64_t localEpoch = static_cast<int64_t>(rawNow) + utcOffsetSeconds;
+      minute = static_cast<int>((localEpoch % 3600LL) / 60LL);
+    } else {
+      uint8_t h = 0, m = 0;
+      if (halClock.getTime(h, m)) {
+        const int offsetQuarterHours = static_cast<int>(SETTINGS.clockUtcOffsetQ) - 48;
+        int totalMinutes = static_cast<int>(h) * 60 + static_cast<int>(m) + offsetQuarterHours * 15;
+        minute = ((totalMinutes % 60) + 60) % 60;
+      }
+    }
+    if (minute >= 0) {
       int secondsToNextHour = (60 - minute) * 60;
       if (secondsToNextHour < 60) secondsToNextHour = 3600;
       LOG_INF("MAIN", "Arming RTC timer wakeup for next hour in %d seconds", secondsToNextHour);
@@ -899,37 +912,34 @@ void setup() {
     renderer.begin();
 
     const auto& events = CALENDAR_EVENT_STORE.getEvents();
-    uint16_t year = 2026;
-    uint8_t month = 1, day = 1, hour = 0, min = 0;
-    bool hasTime = halClock.isAvailable() && halClock.getDateTime(year, month, day, hour, min);
-    if (!hasTime || year < 2025) {
-      time_t rawNow = time(nullptr);
-      struct tm* tmInfo = localtime(&rawNow);
-      if (tmInfo && tmInfo->tm_year + 1900 >= 2025) {
-        year = tmInfo->tm_year + 1900;
-        month = tmInfo->tm_mon + 1;
-        day = tmInfo->tm_mday;
-        hour = tmInfo->tm_hour;
-        min = tmInfo->tm_min;
-        hasTime = true;
-      }
-    }
+    const int utcOffsetSeconds = (SETTINGS.clockUtcOffsetQ - 48) * 15 * 60;
     int64_t currentLocalEpoch = 0;
-    if (hasTime && year >= 2025) {
-      static const int daysInM[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-      auto isLeap = [](int y) { return (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)); };
-      int64_t totalDays = 0;
-      for (int y = 1970; y < year; ++y) totalDays += isLeap(y) ? 366 : 365;
-      for (int m = 1; m < month; ++m) totalDays += (m == 2 && isLeap(year)) ? 29 : daysInM[m - 1];
-      totalDays += (day - 1);
-      currentLocalEpoch = totalDays * 86400LL + hour * 3600LL + min * 60LL;
+    time_t rawNow = time(nullptr);
+    if (rawNow >= 1735689600) {  // >= 2025-01-01
+      currentLocalEpoch = static_cast<int64_t>(rawNow) + utcOffsetSeconds;
+    } else {
+      uint16_t year = 0;
+      uint8_t month = 0, day = 0, hour = 0, min = 0;
+      if (halClock.getDateTime(year, month, day, hour, min) && year >= 2025) {
+        static const int daysInM[] = {31, 28, 31, 30, 31, 30, 31, 30, 31, 30, 31, 30, 31};
+        auto isLeap = [](int y) { return (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)); };
+        int64_t totalDays = 0;
+        for (int y = 1970; y < year; ++y) totalDays += isLeap(y) ? 366 : 365;
+        for (int m = 1; m < month; ++m) totalDays += (m == 2 && isLeap(year)) ? 29 : daysInM[m - 1];
+        totalDays += (day - 1);
+        currentLocalEpoch = totalDays * 86400LL + hour * 3600LL + min * 60LL + utcOffsetSeconds;
+      }
     }
 
     CalendarTheme theme;
     theme.drawSleepScreen(renderer, events, currentLocalEpoch);
     renderer.displayBuffer(HalDisplay::HALF_REFRESH, true);
 
-    int secondsToNextHour = (60 - min) * 60;
+    int currentMinute = 0;
+    if (currentLocalEpoch > 0) {
+      currentMinute = static_cast<int>((currentLocalEpoch % 3600LL) / 60LL);
+    }
+    int secondsToNextHour = (60 - currentMinute) * 60;
     if (secondsToNextHour < 60) secondsToNextHour = 3600;
     esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(secondsToNextHour) * 1000000ULL);
 

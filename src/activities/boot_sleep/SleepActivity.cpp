@@ -810,35 +810,28 @@ void SleepActivity::renderDashboardSleepScreen() const {
 void SleepActivity::renderCalendarSleepScreen() const {
   const auto& events = CALENDAR_EVENT_STORE.getEvents();
 
-  uint16_t year = 2026;
-  uint8_t month = 1, day = 1, hour = 0, min = 0;
-  bool hasTime = halClock.isAvailable() && halClock.getDateTime(year, month, day, hour, min);
-  if (!hasTime || year < 2025) {
-    time_t rawNow = time(nullptr);
-    struct tm* tmInfo = localtime(&rawNow);
-    if (tmInfo && tmInfo->tm_year + 1900 >= 2025) {
-      year = tmInfo->tm_year + 1900;
-      month = tmInfo->tm_mon + 1;
-      day = tmInfo->tm_mday;
-      hour = tmInfo->tm_hour;
-      min = tmInfo->tm_min;
-      hasTime = true;
-    }
-  }
-
+  const int utcOffsetSeconds = (SETTINGS.clockUtcOffsetQ - 48) * 15 * 60;
   int64_t currentLocalEpoch = 0;
-  if (hasTime && year >= 2025) {
-    static const int daysInM[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-    auto isLeap = [](int y) { return (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)); };
-    int64_t totalDays = 0;
-    for (int y = 1970; y < year; ++y) {
-      totalDays += isLeap(y) ? 366 : 365;
+
+  time_t rawNow = time(nullptr);
+  if (rawNow >= 1735689600) {  // >= 2025-01-01
+    currentLocalEpoch = static_cast<int64_t>(rawNow) + utcOffsetSeconds;
+  } else {
+    uint16_t year = 0;
+    uint8_t month = 0, day = 0, hour = 0, min = 0;
+    if (halClock.getDateTime(year, month, day, hour, min) && year >= 2025) {
+      static const int daysInM[] = {31, 28, 31, 30, 31, 30, 31, 30, 31, 30, 31, 30, 31};
+      auto isLeap = [](int y) { return (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)); };
+      int64_t totalDays = 0;
+      for (int y = 1970; y < year; ++y) {
+        totalDays += isLeap(y) ? 366 : 365;
+      }
+      for (int m = 1; m < month; ++m) {
+        totalDays += (m == 2 && isLeap(year)) ? 29 : daysInM[m - 1];
+      }
+      totalDays += (day - 1);
+      currentLocalEpoch = totalDays * 86400LL + hour * 3600LL + min * 60LL + utcOffsetSeconds;
     }
-    for (int m = 1; m < month; ++m) {
-      totalDays += (m == 2 && isLeap(year)) ? 29 : daysInM[m - 1];
-    }
-    totalDays += (day - 1);
-    currentLocalEpoch = totalDays * 86400LL + hour * 3600LL + min * 60LL;
   }
 
   CalendarTheme theme;

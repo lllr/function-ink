@@ -37,8 +37,14 @@ class HalClock {
   // Call after BoardConfig has selected the active device.
   void begin();
 
-  // True if an RTC is present on this device
-  bool isAvailable() const { return _available; }
+  // True if an RTC is present on this device or system time is valid
+  bool isAvailable() const;
+
+  // True specifically if an external hardware RTC chip is present
+  bool hasHardwareRtc() const { return _available; }
+
+  // Check if system time has been synced (valid year >= 2025)
+  static bool isSystemTimeValid();
 
   // Get current hour (0-23) and minute (0-59).
   // Returns false if RTC is not available.

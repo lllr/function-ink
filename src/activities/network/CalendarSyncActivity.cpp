@@ -182,32 +182,29 @@ void CalendarSyncActivity::performSync() {
   statusMessage = "Updating time and calendar...";
   requestUpdateAndWait();
 
-  if (halClock.isAvailable()) {
-    halClock.syncFromNTP();
-  }
+  // Always sync system time (and hardware RTC if present) via NTP
+  halClock.syncFromNTP();
 
-  uint16_t year = 2026;
-  uint8_t month = 1, day = 1, hour = 0, min = 0;
-  bool hasTime = halClock.isAvailable() && halClock.getDateTime(year, month, day, hour, min);
-  if (!hasTime || year < 2025) {
-    time_t rawNow = time(nullptr);
-    struct tm* tmInfo = localtime(&rawNow);
-    if (tmInfo && tmInfo->tm_year + 1900 >= 2025) {
-      year = tmInfo->tm_year + 1900;
-      month = tmInfo->tm_mon + 1;
-      day = tmInfo->tm_mday;
-      hour = tmInfo->tm_hour;
-      min = tmInfo->tm_min;
-      hasTime = true;
+  const int utcOffsetSeconds = (SETTINGS.clockUtcOffsetQ - 48) * 15 * 60;
+  int64_t currentLocalEpoch = 0;
+
+  time_t rawNow = time(nullptr);
+  if (rawNow >= 1735689600) {  // >= 2025-01-01
+    currentLocalEpoch = static_cast<int64_t>(rawNow) + utcOffsetSeconds;
+  } else {
+    uint16_t year = 0;
+    uint8_t month = 0, day = 0, hour = 0, min = 0;
+    if (halClock.getDateTime(year, month, day, hour, min) && year >= 2025) {
+      currentLocalEpoch = toEpoch(year, month, day, hour, min, 0) + utcOffsetSeconds;
     }
   }
-  int utcOffsetSeconds = (SETTINGS.clockUtcOffsetQ - 48) * 15 * 60;
 
   int64_t minEpoch = 0;
   int64_t maxEpoch = INT64_MAX;
-  if (hasTime && year >= 2025) {
-    minEpoch = toEpoch(year, month, day, 0, 0, 0);  // Start of today
-    maxEpoch = minEpoch + 4 * 86400LL;              // Next 3 days inclusive
+  if (currentLocalEpoch > 0) {
+    int64_t daysSinceEpoch = currentLocalEpoch / 86400LL;
+    minEpoch = daysSinceEpoch * 86400LL;  // Start of today in local epoch
+    maxEpoch = minEpoch + 4 * 86400LL;    // Next 3 days inclusive
   }
 
   std::vector<CalendarEvent> allEvents;

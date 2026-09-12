@@ -68,13 +68,29 @@ void adjustDateByDays(uint16_t& year, uint8_t& month, uint8_t& day, const int da
 }
 }  // namespace
 
+bool HalClock::isSystemTimeValid() {
+  return time(nullptr) >= 1735689600;  // >= 2025-01-01 00:00:00 UTC
+}
+
+bool HalClock::isAvailable() const {
+  return _available || isSystemTimeValid();
+}
+
 void HalClock::begin() {
   _available = _sdkRtc.begin();
   LOG_INF("CLK", _available ? "SDK RTC found" : "RTC not found");
 }
 
 bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
-  if (!_available) return false;
+  if (!_available) {
+    time_t now = time(nullptr);
+    if (now < 1735689600) return false;
+    struct tm timeinfo;
+    gmtime_r(&now, &timeinfo);
+    hour = static_cast<uint8_t>(timeinfo.tm_hour);
+    minute = static_cast<uint8_t>(timeinfo.tm_min);
+    return true;
+  }
 
   const unsigned long now = millis();
   if (_lastPollMs != 0 && (now - _lastPollMs) < CLOCK_POLL_MS) {
@@ -133,7 +149,18 @@ bool HalClock::formatTime(char* buf, size_t bufSize, uint8_t utcOffsetQuarterHou
 }
 
 bool HalClock::getDate(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t& hour, uint8_t& minute) const {
-  if (!_available) return false;
+  if (!_available) {
+    time_t now = time(nullptr);
+    if (now < 1735689600) return false;
+    struct tm timeinfo;
+    gmtime_r(&now, &timeinfo);
+    year = static_cast<uint16_t>(timeinfo.tm_year + 1900);
+    month = static_cast<uint8_t>(timeinfo.tm_mon + 1);
+    day = static_cast<uint8_t>(timeinfo.tm_mday);
+    hour = static_cast<uint8_t>(timeinfo.tm_hour);
+    minute = static_cast<uint8_t>(timeinfo.tm_min);
+    return true;
+  }
 
   const unsigned long now = millis();
   if (_lastPollMs != 0 && (now - _lastPollMs) < CLOCK_POLL_MS && _hasCachedDate) {
@@ -260,9 +287,12 @@ bool HalClock::writeDateTimeToRTC(uint16_t year, uint8_t month, uint8_t day, uin
 }
 
 bool HalClock::syncFromNTP() {
-  if (!_available) return false;
-
   if (!syncSystemTimeFromNTP()) return false;
+
+  if (!_available) {
+    LOG_INF("CLK", "System time synced via NTP (no hardware RTC present)");
+    return true;
+  }
 
   time_t now = time(nullptr);
   struct tm timeinfo;
